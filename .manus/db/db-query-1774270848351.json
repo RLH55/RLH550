@@ -1,0 +1,9 @@
+{
+  "query": "\nALTER TABLE users MODIFY COLUMN openId VARCHAR(64) NOT NULL DEFAULT '';\n",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 44MZAmnyHK8SzL4.root --database c7EY27vYTUqU96WMMKLYzX --execute \nALTER TABLE users MODIFY COLUMN openId VARCHAR(64) NOT NULL DEFAULT '';\n",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 1895
+}

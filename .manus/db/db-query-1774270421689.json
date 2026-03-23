@@ -1,0 +1,9 @@
+{
+  "query": "\nALTER TABLE users \n  ADD COLUMN username VARCHAR(64),\n  ADD COLUMN passwordHash VARCHAR(255),\n  ADD COLUMN isActive BOOLEAN NOT NULL DEFAULT TRUE;\n\nUPDATE users SET username = CONCAT('user_', id), passwordHash = 'placeholder' WHERE username IS NULL;\n\nALTER TABLE users \n  MODIFY COLUMN username VARCHAR(64) NOT NULL,\n  MODIFY COLUMN passwordHash VARCHAR(255) NOT NULL;\n\nCREATE UNIQUE INDEX idx_users_username ON users(username);\n",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 44MZAmnyHK8SzL4.root --database c7EY27vYTUqU96WMMKLYzX --execute \nALTER TABLE users \n  ADD COLUMN username VARCHAR(64),\n  ADD COLUMN passwordHash VARCHAR(255),\n  ADD COLUMN isActive BOOLEAN NOT NULL DEFAULT TRUE;\n\nUPDATE users SET username = CONCAT('user_', id), passwordHash = 'placeholder' WHERE username IS NULL;\n\nALTER TABLE users \n  MODIFY COLUMN username VARCHAR(64) NOT NULL,\n  MODIFY COLUMN passwordHash VARCHAR(255) NOT NULL;\n\nCREATE UNIQUE INDEX idx_users_username ON users(username);\n",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 4356
+}

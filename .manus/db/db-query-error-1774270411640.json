@@ -1,0 +1,8 @@
+{
+  "query": "\nALTER TABLE users \n  ADD COLUMN username VARCHAR(64) UNIQUE,\n  ADD COLUMN passwordHash VARCHAR(255),\n  ADD COLUMN isActive BOOLEAN NOT NULL DEFAULT TRUE;\n\nUPDATE users SET username = CONCAT('user_', id), passwordHash = 'placeholder' WHERE username IS NULL;\n\nALTER TABLE users \n  MODIFY COLUMN username VARCHAR(64) NOT NULL,\n  MODIFY COLUMN passwordHash VARCHAR(255) NOT NULL;\n",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 44MZAmnyHK8SzL4.root --database c7EY27vYTUqU96WMMKLYzX --execute \nALTER TABLE users \n  ADD COLUMN username VARCHAR(64) UNIQUE,\n  ADD COLUMN passwordHash VARCHAR(255),\n  ADD COLUMN isActive BOOLEAN NOT NULL DEFAULT TRUE;\n\nUPDATE users SET username = CONCAT('user_', id), passwordHash = 'placeholder' WHERE username IS NULL;\n\nALTER TABLE users \n  MODIFY COLUMN username VARCHAR(64) NOT NULL,\n  MODIFY COLUMN passwordHash VARCHAR(255) NOT NULL;\n",
+  "returncode": 1,
+  "logs": [
+    "ERROR 8200 (HY000) at line 2: unsupported add column 'username' constraint UNIQUE KEY when altering 'c7EY27vYTUqU96WMMKLYzX.users'"
+  ]
+}
