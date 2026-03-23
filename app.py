@@ -789,9 +789,10 @@ def server_stats(key):
         if os.path.exists(log_path):
             with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
                 all_logs = f.read()
-                lines = all_logs.split('\n')
-                last_15_lines = lines[-15:]
-                logs = '\n'.join(last_15_lines)
+                if len(all_logs) > 100000:
+                    logs = all_logs[-100000:]
+                else:
+                    logs = all_logs
         else:
             logs = ""
     except Exception:

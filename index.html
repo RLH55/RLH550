@@ -214,14 +214,32 @@
       border-radius: 16px;
       padding:14px;
       height: 520px;
-      overflow:auto;
+      overflow-y:auto;
+      overflow-x:hidden;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size:12px;
       line-height:1.5;
       white-space:pre-wrap;
+      word-wrap:break-word;
+      word-break:break-all;
       color: rgba(235,245,255,.86);
       direction:ltr;
       text-align:left;
+      scrollbar-width:thin;
+      scrollbar-color:rgba(0,212,255,.3) rgba(0,0,0,.2);
+    }
+    .console::-webkit-scrollbar{
+      width:6px;
+    }
+    .console::-webkit-scrollbar-track{
+      background:rgba(0,0,0,.2);
+    }
+    .console::-webkit-scrollbar-thumb{
+      background:rgba(0,212,255,.3);
+      border-radius:3px;
+    }
+    .console::-webkit-scrollbar-thumb:hover{
+      background:rgba(0,212,255,.5);
     }
     .side{display:flex;flex-direction:column;gap:10px}
 
@@ -769,16 +787,16 @@
         if (r.redirected){ safeRedirect(r.url); return; }
         const d = await r.json();
 
-        document.getElementById('logOut').textContent = d.logs || "لا توجد سجلات";
+        const lo = document.getElementById('logOut');
+        lo.textContent = d.logs || "لا توجد سجلات";
+        lo.scrollTop = lo.scrollHeight;
+        
         document.getElementById('statusTxt').textContent = statusLabel(d.status);
         document.getElementById('memTxt').textContent = d.mem || '0 MB';
         document.getElementById('ipTxt').textContent = d.ip || '';
 
         const running = (d.status === "Running" || d.status === "Installing" || d.status === "Starting");
         document.getElementById('btnStart').disabled = running;
-
-        const lo = document.getElementById('logOut');
-        lo.scrollTop = lo.scrollHeight;
       } catch(e) {}
     };
 
