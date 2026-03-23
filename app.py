@@ -163,6 +163,8 @@ def log_append(key: str, text: str):
         p = os.path.join(get_server_dir(owner, folder), "server.log")
         with open(p, "a", encoding="utf-8", errors="ignore") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
     except Exception:
         pass
 
@@ -523,11 +525,18 @@ def _patched_import(name, *args, **kwargs):
 builtins.__import__ = _patched_import
 
 try:
+    sys.stdout.flush()
+    sys.stderr.flush()
     runpy.run_path(script, run_name="__main__")
-except SystemExit:
-    pass
-except Exception:
-    traceback.print_exc()
+except SystemExit as e:
+    print(f"[SYSTEM] Exit Code: {e.code}", file=sys.stderr, flush=True)
+except Exception as e:
+    print(f"[SYSTEM] Error:", file=sys.stderr, flush=True)
+    traceback.print_exc(file=sys.stderr)
+    sys.stderr.flush()
+finally:
+    sys.stdout.flush()
+    sys.stderr.flush()
 '''
     wrapper_path = os.path.join(get_server_dir(owner, folder), "_runner.py")
     with open(wrapper_path, "w", encoding="utf-8") as f:
@@ -549,8 +558,26 @@ except Exception:
         stdout=logf,
         stderr=logf,
         text=True,
-        bufsize=1
+        bufsize=1,
+        universal_newlines=True
     )
+    
+    def flush_logs():
+        try:
+            logf.flush()
+            os.fsync(logf.fileno())
+        except:
+            pass
+    
+    def monitor_logs():
+        while proc.poll() is None:
+            flush_logs()
+            time.sleep(0.1)
+        flush_logs()
+    
+    monitor_thread = threading.Thread(target=monitor_logs, daemon=True)
+    monitor_thread.start()
+    
     return proc, logf
 
 
