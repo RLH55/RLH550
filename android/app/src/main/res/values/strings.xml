@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OmarHostMobile</string>
+    <string name="title_activity_main">OmarHostMobile</string>
+    <string name="package_name">com.omarhost.app</string>
+    <string name="custom_url_scheme">com.omarhost.app</string>
+</resources>
