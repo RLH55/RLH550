@@ -646,6 +646,7 @@
       const port = location.port || 5000;
       if(!d.servers || d.servers.length === 0){
         ipTxt.textContent = `المضيف: ${location.hostname}:${port}`;
+        loadUserInfo();
         return;
       }
 
@@ -659,6 +660,7 @@
     }catch(e){
       const port = location.port || 5000;
       ipTxt.textContent = `المضيف: ${location.hostname}:${port}`;
+      loadUserInfo();
     }
   }
 
@@ -1031,9 +1033,11 @@
   function escapeAttr(s){ return escapeHtml(s).replaceAll("\\","\\\\"); }
 
   document.addEventListener('DOMContentLoaded', ()=>{
+    loadUserInfo();
     loadServers();
     loadPythonHost();
     startKeepAlive();
+    setInterval(loadUserInfo, 5000);
   });
 
   // ===== Keep-Alive System =====
