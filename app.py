@@ -608,6 +608,36 @@ def logout():
 
 
 # ---------------------------
+# Static Files (Images, CSS, JS)
+# ---------------------------
+@app.route("/logo.png")
+def serve_logo():
+    """تقديم صورة اللوجو"""
+    return send_from_directory(BASE_DIR, "logo.png")
+
+
+@app.route("/omar-bro.png")
+def serve_omar_bro():
+    """تقديم صورة OMAR BRO"""
+    return send_from_directory(BASE_DIR, "omar-bro.png")
+
+
+@app.route("/<path:filename>")
+def serve_static(filename):
+    """تقديم الملفات الثابتة الأخرى"""
+    # تجنب تقديم ملفات خطرة
+    if filename in ("app.py", "requirements.txt") or filename.startswith("."):
+        return jsonify({"error": "Forbidden"}), 403
+    
+    # التحقق من وجود الملف
+    file_path = os.path.join(BASE_DIR, filename)
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        return send_from_directory(BASE_DIR, filename)
+    
+    return jsonify({"error": "Not Found"}), 404
+
+
+# ---------------------------
 # Auth APIs
 # ---------------------------
 @app.route("/api/auth/login", methods=["POST"])
