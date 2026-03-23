@@ -271,7 +271,7 @@
   <!-- Top Bar -->
   <div class="top">
     <div class="logo-area">
-      <img src="omar-bro.png" alt="OMAR" style="width:40px;height:40px;border-radius:12px;object-fit:cover;border:1px solid rgba(0,212,255,.3)">
+      <img src="/omar-bro.png" alt="OMAR" style="width:40px;height:40px;border-radius:12px;object-fit:cover;border:1px solid rgba(0,212,255,.3)">
       <div>
         <div class="logo-text"><span>OMAR-HOST</span></div>
         <div class="logo-sub">لوحة تحكم المسؤول</div>
@@ -954,6 +954,28 @@ function escapeAttr(s){ return escapeHtml(s).replaceAll("\\","\\\\"); }
 document.addEventListener('DOMContentLoaded', () => {
   refreshAll();
   setInterval(refreshStats, 30000);
+  startAdminKeepAlive();
+});
+
+// ===== Keep-Alive System (Admin) =====
+// يمنع انتهاء جلسة الأدمين وتوقف الموقع
+function startAdminKeepAlive() {
+  sendAdminKeepAlive();
+  setInterval(sendAdminKeepAlive, 120000);
+}
+
+function sendAdminKeepAlive() {
+  fetch('/api/keepalive', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    credentials: 'same-origin'
+  }).catch(() => {});
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    sendAdminKeepAlive();
+  }
 });
 </script>
 </body>

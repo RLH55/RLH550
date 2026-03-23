@@ -472,16 +472,31 @@
     <div class="panel" id="viewConsole">
       <div class="grid-2">
         <div class="console" id="logOut">جاري التهيئة...</div>
+        <script>
+          // تحديث الكونسول لعرض آخر 15 سطر فقط
+          const originalConsole = document.getElementById('logOut');
+          const maxLines = 15;
+          let logLines = [];
+          
+          function addLogLine(text) {
+            logLines.push(text);
+            if (logLines.length > maxLines) {
+              logLines.shift();
+            }
+            originalConsole.textContent = logLines.join('\n');
+            originalConsole.scrollTop = originalConsole.scrollHeight;
+          }
+        </script>
         <div class="side">
           <button id="btnStart" class="btn-block primary" onclick="srvAction('start')">▶ تشغيل</button>
           <button class="btn-block" onclick="srvAction('restart')">🔄 إعادة تشغيل</button>
           <button class="btn-block danger" onclick="srvAction('stop')">⏹ إيقاف</button>
-          
-          <div class="stat"><div class="ico">📡</div><div><small>الحالة</small><b id="statusTxt">Offline</b></div></div>
+          <button class="btn-block danger" onclick="deleteServer()" style="background:rgba(255,100,100,.15);border-color:rgba(255,100,100,.3)">🗑 حذف السيرفر</button>
+
+          <div class="stat"><div class="ico">⚡</div><div><small>الحالة</small><b id="statusTxt">غير متصل</b></div></div>
           <div class="stat"><div class="ico">🧠</div><div><small>الذاكرة</small><b id="memTxt">0 MB</b></div></div>
-          <div class="stat"><div class="ico">🌐</div><div><small>IP</small><b id="ipTxt">—</b></div></div>
-          <div class="stat"><div class="ico">🔌</div><div><small>البورت</small><b id="portTxt">—</b></div></div>
-          <div class="stat"><div class="ico">📄</div><div><small>الملف الرئيسي</small><b id="mainFileTxt">main.py</b></div></div>
+          <div class="stat"><div class="ico">💿</div><div><small>الملف الرئيسي</small><b id="mainFileTxt" style="color:var(--accent)">main.py</b></div></div>
+          <div class="stat"><div class="ico">📡</div><div><small>عنوان IP</small><b id="ipTxt">0.0.0.0</b></div></div>
           <div class="stat"><div class="ico">📅</div><div><small>الأيام المتبقية</small><b id="daysLeftTxt">—</b></div></div>
           <div class="stat"><div class="ico">🖥️</div><div><small>السيرفرات</small><b id="serversCountTxt">—</b></div></div>
         </div>
@@ -548,16 +563,6 @@
   let currentSrv = null, poll = null, currentFile = null;
   let currentPath = '';
 
-  // دالة لإضافة سطور للكونسول (آخر 15 سطر فقط)
-  const maxLogLines = 15;
-  let logLines = [];
-  function addLogLine(text) {
-    logLines.push(text);
-    if (logLines.length > maxLogLines) logLines.shift();
-    const el = document.getElementById('logOut');
-    if(el){ el.textContent = logLines.join('\n'); el.scrollTop = el.scrollHeight; }
-  }
-
   // Toast notification
   function showToast(msg, duration=2500){
     const t = document.getElementById('toast');
@@ -599,25 +604,18 @@
       if (r.ok){
         const d = await r.json();
         if(d.success){
-          // الـ backend يرسل days_left كنص عربي جاهز مثل "3 يوم و 5 ساعة" أو "منتهي"
-          const daysDisplay = (d.days_left !== undefined && d.days_left !== null && d.days_left !== '') 
-            ? String(d.days_left) 
-            : '—';
-          const serversUsed = d.servers_used !== undefined ? d.servers_used : 0;
-          const serversLimit = d.servers_limit !== undefined ? d.servers_limit : 1;
+          const daysLeft = d.days_left || '—';
+          const serversUsed = d.servers_used || 0;
+          const serversLimit = d.servers_limit || 1;
+          const daysText = daysLeft === '—' ? '—' : `${daysLeft} يوم`;
           const serversText = `${serversUsed}/${serversLimit}`;
-          const daysEl = document.getElementById('daysLeftTxt');
-          const srvEl = document.getElementById('serversCountTxt');
-          const headerDays = document.getElementById('headerDaysLeft');
-          const headerSrv = document.getElementById('headerServersCount');
-          if(daysEl) daysEl.textContent = daysDisplay;
-          if(srvEl) srvEl.textContent = serversText;
-          if(headerDays) headerDays.textContent = daysDisplay;
-          if(headerSrv) headerSrv.textContent = serversText;
+          document.getElementById('daysLeftTxt').textContent = daysText;
+          document.getElementById('serversCountTxt').textContent = serversText;
+          document.getElementById('headerDaysLeft').textContent = daysText;
+          document.getElementById('headerServersCount').textContent = serversText;
         }
       }
-    }catch(e){ console.error('loadUserInfo error:', e); }
-    setTimeout(loadUserInfo, 60000);
+    }catch(e){}
   }
 
   async function loadPythonHost(){
@@ -775,7 +773,6 @@
         document.getElementById('statusTxt').textContent = statusLabel(d.status);
         document.getElementById('memTxt').textContent = d.mem || '0 MB';
         document.getElementById('ipTxt').textContent = d.ip || '';
-        document.getElementById('portTxt').textContent = d.port || '—';
 
         const running = (d.status === "Running" || d.status === "Installing" || d.status === "Starting");
         document.getElementById('btnStart').disabled = running;
@@ -1018,7 +1015,31 @@
   document.addEventListener('DOMContentLoaded', ()=>{
     loadServers();
     loadPythonHost();
-    loadUserInfo();
+    startKeepAlive();
+  });
+
+  // ===== Keep-Alive System =====
+  // يرسل طلب كل دقيقتين لمنع انتهاء الجلسة ومنع توقف الموقع
+  function startKeepAlive() {
+    // إرسال فوري عند فتح الصفحة
+    sendKeepAlive();
+    // تكرار كل دقيقتين (120000 ملليثانية)
+    setInterval(sendKeepAlive, 120000);
+  }
+
+  function sendKeepAlive() {
+    fetch('/api/keepalive', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin'
+    }).catch(() => {});
+  }
+
+  // منع توقف الصفحة عند إخفاء التبويب (منع Page Visibility API)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      sendKeepAlive();
+    }
   });
 </script>
 </body>
